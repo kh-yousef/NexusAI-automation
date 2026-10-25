@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
-  Play, Plus, Trash2, Settings, Code, Sparkles, Search, FileJson,
+  Play, Plus, Trash2, Settings, Code, Sparkles, FileJson,
   CheckCircle2, AlertCircle, Loader2, ArrowRight, Copy, Check,
-  Download, Layers, Zap, Terminal, Globe, Cpu, HelpCircle,
-  ChevronRight, ChevronDown, RefreshCw, Send, Lock, Eye, Share2,
-  Database, Sliders, MessageSquare, Briefcase, Mail, ShieldCheck
+  Download, Layers, Zap, Terminal, Globe, Cpu,
+  Briefcase, ShieldCheck, Key, ExternalLink, X
 } from 'lucide-react';
 
 // ==========================================
@@ -125,7 +124,7 @@ const WORKFLOW_TEMPLATES = [
   },
   {
     id: 'support-triage',
-    name: 'omni-Channel Support Triage & Bug Router',
+    name: 'Omni-Channel Support Triage & Bug Router',
     category: 'Customer Support & Eng',
     icon: ShieldCheck,
     description: 'Classifies customer tickets, extracts reproduction steps into Jira-ready JSON, and drafts empathetic customer responses.',
@@ -170,8 +169,18 @@ const WORKFLOW_TEMPLATES = [
 // ==========================================
 // GEMINI API HELPER WITH EXPONENTIAL BACKOFF
 // ==========================================
-async function executeGeminiNode({ systemPrompt, userPrompt, useSearch, outputFormat, jsonSchema }) {
-  const apiKey = ""; // Provided by runtime environment
+async function executeGeminiNode({ systemPrompt, userPrompt, useSearch, outputFormat, jsonSchema, customApiKey }) {
+  // Automatically checks custom UI key first, then Vite .env if running locally, otherwise uses preview runtime key
+  let envKey = "";
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) {
+      envKey = import.meta.env.VITE_GEMINI_API_KEY;
+    }
+  } catch (e) {
+    // Ignore in environments without import.meta
+  }
+
+  const apiKey = (customApiKey && customApiKey.trim()) ? customApiKey.trim() : envKey;
   const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
 
   const payload = {
@@ -251,9 +260,19 @@ export default function App() {
   const [nodes, setNodes] = useState(WORKFLOW_TEMPLATES[0].nodes);
   const [selectedNodeId, setSelectedNodeId] = useState(WORKFLOW_TEMPLATES[0].nodes[0].id);
 
+  // Custom API Key state for easy local runs without .env
+  const [customApiKey, setCustomApiKey] = useState(() => {
+    try {
+      return localStorage.getItem('nexusflow_gemini_key') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [showKeyModal, setShowKeyModal] = useState(false);
+
   // Execution state
   const [isRunning, setIsRunning] = useState(false);
-  const [nodeStatuses, setNodeStatuses] = useState({}); // { [nodeId]: { status: 'idle'|'running'|'success'|'error', output: '', sources: [], durationMs: 0, error: '' } }
+  const [nodeStatuses, setNodeStatuses] = useState({});
   const [executionHistory, setExecutionHistory] = useState([]);
   const [copiedKey, setCopiedKey] = useState(null);
   const [deployLang, setDeployLang] = useState('nodejs');
@@ -262,6 +281,15 @@ export default function App() {
   const showToast = (msg, type = 'success') => {
     setNotification({ msg, type });
     setTimeout(() => setNotification(null), 3500);
+  };
+
+  const handleSaveApiKey = (val) => {
+    setCustomApiKey(val);
+    try {
+      localStorage.setItem('nexusflow_gemini_key', val);
+    } catch {
+      // ignore storage errors
+    }
   };
 
   // Load template
@@ -358,7 +386,8 @@ export default function App() {
           userPrompt: interpolatedPrompt,
           useSearch: node.useSearch,
           outputFormat: node.outputFormat,
-          jsonSchema: node.jsonSchema
+          jsonSchema: node.jsonSchema,
+          customApiKey
         });
 
         const durationMs = Date.now() - stepStart;
@@ -472,10 +501,10 @@ export default function App() {
       return `/**
  * ${workflowName} - Production Microservice
  * Ready to deploy on Node.js 18+, Vercel, Cloudflare Workers, or AWS Lambda
- * Usage: GEMINI_API_KEY="your_key" node pipeline.js
+ * Usage: GEMINI_API_KEY="your_key" node pipeline.mjs
  */
 
-const API_KEY = process.env.GEMINI_API_KEY;
+const API_KEY = process.env.GEMINI_API_KEY || "${customApiKey || 'YOUR_GEMINI_API_KEY'}";
 const ENDPOINT = \`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=\${API_KEY}\`;
 
 const PIPELINE_NODES = ${serializedNodes};
@@ -540,7 +569,7 @@ import os
 import json
 import requests
 
-API_KEY = os.environ.get("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY")
+API_KEY = os.environ.get("GEMINI_API_KEY", "${customApiKey || 'YOUR_GEMINI_API_KEY'}")
 ENDPOINT = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={API_KEY}"
 
 PIPELINE_NODES = json.loads("""${serializedNodes.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}""")
@@ -588,7 +617,7 @@ if __name__ == "__main__":
     // cURL / Webhook format
     const firstNode = nodes[0];
     return `# Direct REST API Call for Step 1 (${firstNode.title})
-curl -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=\${GEMINI_API_KEY}" \\
+curl -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${customApiKey || '${GEMINI_API_KEY}'}" \\
   -H "Content-Type: application/json" \\
   -d '${JSON.stringify({
       contents: [{ parts: [{ text: firstNode.userPromptTemplate.replace('{{input}}', triggerInput) }] }],
@@ -611,6 +640,79 @@ curl -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-f
         </div>
       )}
 
+      {/* API Key Modal for Local Machine Setup */}
+      {showKeyModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                  <Key className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white">Gemini API Key Setup</h3>
+                  <p className="text-xs text-slate-400">For running on your local machine</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowKeyModal(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 text-xs text-slate-300 space-y-2">
+              <p className="font-semibold text-indigo-300">Don't have an API key yet? Get one free in 60 seconds:</p>
+              <ol className="list-decimal list-inside space-y-1 text-slate-400">
+                <li>Visit <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-indigo-400 underline hover:text-indigo-300 inline-flex items-center gap-1">Google AI Studio <ExternalLink className="w-3 h-3" /></a></li>
+                <li>Sign in with your Google account.</li>
+                <li>Click <strong>"Create API Key"</strong> and copy the key starting with <code>AIzaSy...</code></li>
+              </ol>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                Paste Your Gemini API Key (Optional inside this preview, required on localhost)
+              </label>
+              <input
+                type="password"
+                value={customApiKey}
+                onChange={(e) => handleSaveApiKey(e.target.value)}
+                placeholder="AIzaSy..."
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono"
+              />
+              <p className="text-[11px] text-slate-500 mt-1.5">
+                Stored locally in your browser's <code>localStorage</code>. Never shared externally.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              {customApiKey && (
+                <button
+                  onClick={() => {
+                    handleSaveApiKey('');
+                    showToast('Cleared custom API key');
+                  }}
+                  className="px-3.5 py-2 rounded-xl text-xs font-medium text-rose-400 hover:bg-rose-950/40 transition-colors"
+                >
+                  Clear Key
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  setShowKeyModal(false);
+                  showToast('API Key configuration saved!');
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
+              >
+                Save & Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Navigation Header */}
       <header className="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-md sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
@@ -624,7 +726,7 @@ curl -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-f
                   NexusFlow <span className="text-indigo-400">AI</span>
                 </h1>
                 <span className="text-[11px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                  v2.4 Production Ready
+                  v2.5 Ready
                 </span>
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">
@@ -675,8 +777,21 @@ curl -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-f
             </button>
           </div>
 
-          {/* Primary Execute CTA */}
+          {/* Primary Execute CTA + API Key Button */}
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowKeyModal(true)}
+              title="Set or Get a Free Gemini API Key"
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl border text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                customApiKey
+                  ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300 hover:bg-emerald-950/60'
+                  : 'border-amber-500/60 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 shadow-lg shadow-amber-500/10'
+              }`}
+            >
+              <Key className="w-4 h-4 shrink-0" />
+              <span>{customApiKey ? 'API Key Ready' : 'Set API Key'}</span>
+            </button>
+
             <button
               onClick={exportBlueprintJson}
               title="Download Workflow Blueprint JSON"
@@ -711,6 +826,64 @@ curl -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-f
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
+        {/* Direct Inline API Key Bar so it is impossible to miss on localhost */}
+        <div className="mb-6 bg-slate-900/90 border border-indigo-500/40 rounded-2xl p-3.5 sm:px-5 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-center gap-3">
+            <div className={`p-2 rounded-xl border ${customApiKey ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400' : 'bg-amber-500/20 border-amber-500/40 text-amber-400'}`}>
+              <Key className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs sm:text-sm font-bold text-white">
+                  Gemini API Key (Localhost Mode)
+                </span>
+                {customApiKey ? (
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    Connected
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    Required for Local Runs
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-400">
+                Paste your key from{' '}
+                <a
+                  href="https://aistudio.google.com/apikey"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-indigo-400 underline hover:text-indigo-300"
+                >
+                  Google AI Studio
+                </a>{' '}
+                below to run workflows in your browser:
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 w-full md:w-auto">
+            <input
+              type="password"
+              value={customApiKey}
+              onChange={(e) => handleSaveApiKey(e.target.value)}
+              placeholder="Paste AIzaSy... key here"
+              className="flex-1 md:w-72 bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+            />
+            {customApiKey && (
+              <button
+                onClick={() => {
+                  handleSaveApiKey('');
+                  showToast('Cleared API key');
+                }}
+                className="px-3 py-2 rounded-xl text-xs font-medium bg-slate-800 hover:bg-rose-950/60 text-slate-300 hover:text-rose-300 border border-slate-700 transition-colors"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+
         {activeTab === 'studio' && (
           <div className="space-y-6">
             {/* Template Selector Bar */}
@@ -1056,11 +1229,17 @@ curl -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-f
                         </div>
                       </div>
                     ) : nodeStatuses[selectedNode?.id]?.status === 'error' ? (
-                      <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-300 text-xs space-y-1">
+                      <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-300 text-xs space-y-2">
                         <div className="font-bold flex items-center gap-1.5 text-rose-200">
                           <AlertCircle className="w-4 h-4" /> Step Execution Error
                         </div>
                         <p className="font-mono">{nodeStatuses[selectedNode.id].error}</p>
+                        <button
+                          onClick={() => setShowKeyModal(true)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 font-semibold transition-colors"
+                        >
+                          <Key className="w-3.5 h-3.5" /> Configure Gemini API Key
+                        </button>
                       </div>
                     ) : nodeStatuses[selectedNode?.id]?.output ? (
                       <div className="space-y-4">
